@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Woodgrain background for the whole app */
+:root {
+  --wood-1: #2b1a10;
+  --wood-2: #3a2316;
+  --wood-3: #4a2d1c;
+  --wood-4: #5a3723;
+  --wood-5: #6a4129;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+
+  /* Base wood tone */
+  background-color: var(--wood-2);
+
+  /* Layered "grain" */
+  background-image:
+    radial-gradient(1200px 800px at 20% 10%, rgba(255,255,255,0.06), transparent 60%),
+    radial-gradient(900px 700px at 80% 30%, rgba(0,0,0,0.28), transparent 55%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255,255,255,0.04) 0px,
+      rgba(255,255,255,0.04) 2px,
+      rgba(0,0,0,0.05) 3px,
+      rgba(0,0,0,0.05) 6px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255,255,255,0.02) 0px,
+      rgba(255,255,255,0.02) 10px,
+      rgba(0,0,0,0.03) 14px,
+      rgba(0,0,0,0.03) 22px
+    ),
+    linear-gradient(180deg, var(--wood-1), var(--wood-3) 45%, var(--wood-4));
+
+  background-attachment: fixed;
+  background-size: cover;
+}
