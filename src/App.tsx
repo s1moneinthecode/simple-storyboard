@@ -81,32 +81,204 @@ async function exportAsDocx(chapters: Chapter[], filename: string) {
   saveAs(blob, `${filename}.docx`);
 }
 
-/* ===================== QUILL STYLES ===================== */
-const quillStyles = `
-  .quill-wrapper {
-    display: flex;
-    flex-direction: column;
-    height: 60vh;
-    border-radius: 0.75rem;
-    overflow: hidden;
+/* ===================== DOCX IMPORT (Custom Parser) ===================== */
+async function parseDocxToHtml(file: File): Promise<string> {
+  const JSZip = (await import("jszip")).default;
+  const arrayBuffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const documentXml = await zip.file("word/document.xml")?.async("string");
+  
+  if (!documentXml) {
+    throw new Error("Could not find document.xml in DOCX file");
   }
-  .quill-wrapper .quill {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
+  
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(documentXml, "application/xml");
+  
+  // Get all paragraphs
+  const paragraphs = xmlDoc.getElementsByTagNameNS(
+    "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    "p"
+  );
+  
+  let html = "";
+  
+  for (let i = 0; i < paragraphs.length; i++) {
+    const para = paragraphs[i];
+    const { text: paraHtml, alignment, isHeading, firstLineIndent } = parseParagraph(para);
+    
+    if (isHeading) {
+      html += `<h1>${paraHtml}</h1>`;
+    } else {
+      // Build class list for alignment
+      let classAttr = "";
+      if (alignment === "center") classAttr = ' class="ql-align-center"';
+      else if (alignment === "right") classAttr = ' class="ql-align-right"';
+      else if (alignment === "both" || alignment === "justify") classAttr = ' class="ql-align-justify"';
+      
+      // Add first-line indent as non-breaking spaces at the start
+      let content = paraHtml;
+      if (firstLineIndent > 0 && paraHtml.trim().length > 0) {
+        // Use a tab-like indent (4 non-breaking spaces)
+        content = "&nbsp;&nbsp;&nbsp;&nbsp;" + paraHtml;
+      }
+      
+      html += `<p${classAttr}>${content || "<br>"}</p>`;
+    }
   }
-  .quill-wrapper .ql-toolbar {
-    flex-shrink: 0;
-    border-top-left-radius: 0.75rem;
-    border-top-right-radius: 0.75rem;
+  
+  return html;
+}
+
+function parseParagraph(para: Element): { 
+  text: string; 
+  alignment: string; 
+  isHeading: boolean;
+  firstLineIndent: number;
+} {
+  const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  
+  // Get paragraph properties
+  const pPr = para.getElementsByTagNameNS(W_NS, "pPr")[0];
+  
+  // Check alignment
+  let alignment = "left";
+  if (pPr) {
+    const jc = pPr.getElementsByTagNameNS(W_NS, "jc")[0];
+    if (jc) {
+      alignment = jc.getAttribute("w:val") || "left";
+    }
   }
-  .quill-wrapper .ql-container {
-    flex: 1;
-    overflow: auto;
-    border-bottom-left-radius: 0.75rem;
-    border-bottom-right-radius: 0.75rem;
+  
+  // Check for first-line indent
+  let firstLineIndent = 0;
+  if (pPr) {
+    const ind = pPr.getElementsByTagNameNS(W_NS, "ind")[0];
+    if (ind) {
+      const firstLine = ind.getAttribute("w:firstLine");
+      if (firstLine) {
+        firstLineIndent = parseInt(firstLine, 10) || 0;
+      }
+    }
   }
-`;
+  
+  // Check for heading style
+  let isHeading = false;
+  if (pPr) {
+    const pStyle = pPr.getElementsByTagNameNS(W_NS, "pStyle")[0];
+    if (pStyle) {
+      const styleVal = pStyle.getAttribute("w:val") || "";
+      if (styleVal.toLowerCase().includes("heading")) {
+        isHeading = true;
+      }
+    }
+  }
+  
+  // Get all runs
+  const runs = para.getElementsByTagNameNS(W_NS, "r");
+  let text = "";
+  
+  for (let j = 0; j < runs.length; j++) {
+    text += parseRun(runs[j]);
+  }
+  
+  return { text, alignment, isHeading, firstLineIndent };
+}
+
+function parseRun(run: Element): string {
+  const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  
+  // Get run properties for formatting
+  const rPr = run.getElementsByTagNameNS(W_NS, "rPr")[0];
+  
+  let isBold = false;
+  let isItalic = false;
+  let isUnderline = false;
+  let isStrike = false;
+  
+  if (rPr) {
+    // Check bold
+    const bold = rPr.getElementsByTagNameNS(W_NS, "b")[0];
+    if (bold && bold.getAttribute("w:val") !== "0") {
+      isBold = true;
+    }
+    
+    // Check italic
+    const italic = rPr.getElementsByTagNameNS(W_NS, "i")[0];
+    if (italic && italic.getAttribute("w:val") !== "0") {
+      isItalic = true;
+    }
+    
+    // Check underline
+    const underline = rPr.getElementsByTagNameNS(W_NS, "u")[0];
+    if (underline && underline.getAttribute("w:val") !== "none") {
+      isUnderline = true;
+    }
+    
+    // Check strikethrough
+    const strike = rPr.getElementsByTagNameNS(W_NS, "strike")[0];
+    if (strike && strike.getAttribute("w:val") !== "0") {
+      isStrike = true;
+    }
+  }
+  
+  // Process child nodes in order to preserve tabs, text, and breaks
+  let content = "";
+  const childNodes = run.childNodes;
+  
+  for (let i = 0; i < childNodes.length; i++) {
+    const node = childNodes[i];
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as Element;
+      const localName = element.localName;
+      
+      if (localName === "t") {
+        // Text node
+        content += element.textContent || "";
+      } else if (localName === "tab") {
+        // Tab character - use non-breaking spaces
+        content += "&nbsp;&nbsp;&nbsp;&nbsp;";
+      } else if (localName === "br") {
+        // Line break
+        content += "<br>";
+      }
+    }
+  }
+  
+  // Apply formatting
+  if (content) {
+    if (isBold) content = `<strong>${content}</strong>`;
+    if (isItalic) content = `<em>${content}</em>`;
+    if (isUnderline) content = `<u>${content}</u>`;
+    if (isStrike) content = `<s>${content}</s>`;
+  }
+  
+  return content;
+}
+
+/* ===================== QUILL CONFIG ===================== */
+const quillModules = {
+  toolbar: [
+    [{ header: [1, 2, 3, false] }],
+    ["bold", "italic", "underline", "strike"],
+    [{ align: [] }], // Alignment options: left, center, right, justify
+    [{ list: "ordered" }, { list: "bullet" }],
+    ["link"],
+    ["clean"],
+  ],
+};
+
+const quillFormats = [
+  "header",
+  "bold",
+  "italic",
+  "underline",
+  "strike",
+  "align",
+  "list",
+  "bullet",
+  "link",
+];
 
 /* ===================== APP ===================== */
 export default function App() {
@@ -165,6 +337,48 @@ export default function App() {
     );
   }
 
+  function deleteChapter(id: string) {
+    if (!confirm("Are you sure you want to delete this chapter?")) return;
+    setChapters((prev) => prev.filter((c) => c.id !== id));
+    if (activeId === id) {
+      setActiveId(null);
+      setEditorOpen(false);
+    }
+  }
+
+  /* ---------- DOCX IMPORT HANDLER ---------- */
+  async function handleDocxImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const newChapters: Chapter[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const html = await parseDocxToHtml(file);
+        const title = file.name.replace(/\.docx$/i, "");
+        newChapters.push({
+          id: uid(),
+          title,
+          html,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.error(`Failed to parse ${file.name}:`, err);
+        alert(`Failed to import ${file.name}`);
+      }
+    }
+
+    if (newChapters.length > 0) {
+      setChapters((prev) => [...prev, ...newChapters]);
+    }
+
+    // Reset the input
+    e.target.value = "";
+  }
+
   return (
     <div
       className="min-h-screen text-neutral-100"
@@ -174,7 +388,6 @@ export default function App() {
         backgroundSize: "auto",
       }}
     >
-      <style>{quillStyles}</style>
       <div className="mx-auto max-w-6xl p-6">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold">Simple Storyboard</h1>
@@ -243,27 +456,39 @@ export default function App() {
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((c, i) => (
-            <button
-              key={c.id}
-              onClick={() => {
-                setActiveId(c.id);
-                setEditorOpen(true);
-              }}
-              className="rounded-2xl bg-neutral-900/90 p-4 text-left"
-            >
-              <div className="font-semibold">
-                {c.title || `Chapter ${i + 1}`}
-              </div>
-              <div className="mt-2 text-sm text-neutral-400 line-clamp-4">
-                {stripHtml(c.html) || "Click to write…"}
-              </div>
-            </button>
+            <div key={c.id} className="relative">
+              <button
+                onClick={() => {
+                  setActiveId(c.id);
+                  setEditorOpen(true);
+                }}
+                className="w-full rounded-2xl bg-neutral-900/90 p-4 text-left"
+              >
+                <div className="font-semibold">
+                  {c.title || `Chapter ${i + 1}`}
+                </div>
+                <div className="mt-2 text-sm text-neutral-400 line-clamp-4">
+                  {stripHtml(c.html) || "Click to write…"}
+                </div>
+              </button>
+              {/* Delete button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteChapter(c.id);
+                }}
+                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-neutral-700 hover:bg-red-600 text-neutral-300 hover:text-white flex items-center justify-center text-sm"
+                title="Delete chapter"
+              >
+                ✕
+              </button>
+            </div>
           ))}
         </div>
       </div>
 
       {editorOpen && active && (
-        <div className="fixed inset-0 z-50 bg-black/70 p-4">
+        <div className="fixed inset-0 z-50 bg-black/70 p-4 overflow-auto">
           <div className="mx-auto max-w-4xl rounded-3xl bg-neutral-950 p-6">
             <input
               value={active.title}
@@ -271,15 +496,24 @@ export default function App() {
               className="mb-3 w-full rounded-xl bg-neutral-900 px-4 py-2"
             />
 
-            <div className="quill-wrapper bg-white text-black">
+            <div className="quill-wrapper h-[60vh] flex flex-col">
               <ReactQuill
                 theme="snow"
                 value={active.html}
                 onChange={(v) => updateActive({ html: v })}
+                modules={quillModules}
+                formats={quillFormats}
+                className="flex-1 bg-white text-black overflow-hidden flex flex-col"
               />
             </div>
 
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-between">
+              <button
+                onClick={() => deleteChapter(active.id)}
+                className="rounded-xl bg-red-600 hover:bg-red-700 px-4 py-2 text-white"
+              >
+                Delete chapter
+              </button>
               <button
                 onClick={() => setEditorOpen(false)}
                 className="rounded-xl bg-neutral-100 px-4 py-2 text-neutral-950"
@@ -312,7 +546,18 @@ export default function App() {
         accept=".docx"
         multiple
         className="hidden"
+        onChange={handleDocxImport}
       />
+
+      <style>{`
+        .quill-wrapper .ql-container {
+          flex: 1;
+          overflow: auto;
+        }
+        .quill-wrapper .ql-editor {
+          min-height: 100%;
+        }
+      `}</style>
     </div>
   );
 }
