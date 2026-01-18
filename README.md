@@ -1,3 +1,30 @@
+# Simple Storyboard
+
+A minimal writing app for organizing stories into chapters. Built because existing storyboarding tools were too complicated.
+
+## Features
+
+- **Chapter cards** — Organize your story into chapters displayed as cards
+- **Rich text editor** — Bold, italic, underline, lists, and more
+- **Search** — Quickly find chapters by title or content
+- **Export** — Save your work as DOCX, Markdown, or plain text
+- **Import** — Load existing projects from JSON
+- **Local storage** — Your work saves automatically in your browser
+
+## Tech Stack
+
+React, TypeScript, Vite, Tailwind CSS, ReactQuill
+
+## Run Locally
+```bash
+npm install
+npm run dev
+```
+
+Then open http://localhost:5173 in your browser.
+```
+
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
